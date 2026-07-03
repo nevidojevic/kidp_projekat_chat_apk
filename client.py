@@ -21,7 +21,14 @@ def receive():
 
 def write():
     while True:
-        msg=f'{nickname}:{input("")}'
+        text = input("")
+
+        if text == "/exit":
+            client.send("EXIT".encode("ascii"))
+            client.close()
+            break
+
+        msg = f'{nickname}: {text}'
         client.send(msg.encode('ascii'))
 
 receive_thread=threading.Thread(target=receive)
