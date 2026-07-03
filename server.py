@@ -1,80 +1,109 @@
-import threading
 import socket
+import threading
 
-host="localhost"
-port=55555
+from protocol import *
 
-server=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
 
-server.bind((host,port))
+class ChatServer:
+    def __init__(self):
+        self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server.bind((HOST, PORT))
+        self.server.listen()
 
-server.listen()
+        # shared state: client_socket -> nickname
+        self.clients = {}
+        self.lock = threading.Lock()
 
-#globalne promenljive
-clients = {}
-clients_lock = threading.Lock()
+        print(f"Server started on {HOST}:{PORT}")
 
-#broadcast, handle, receive metode
-def broadcast(msg):
-    # with clients_lock:
-    #     for client in clients:
-    #         client.send(msg)
-    with clients_lock:
-        current_clients = list(clients.keys())
+    def broadcast(self, msg):
+        with self.lock:
+            clients = list(self.clients.keys())
 
-    for client in current_clients:
+        for client in clients:
+            try:
+                client.send(msg)
+            except:
+                pass
+
+    def handle_client(self, client):
+        while True:
+            try:
+                msg = client.recv(BUFFER_SIZE)
+
+                if not msg:
+                    raise Exception()
+
+                decoded = msg.decode(ENCODING)
+
+                if decoded == EXIT:
+                    raise Exception()
+
+                self.broadcast(msg)
+
+            except:
+                nickname = None
+
+                with self.lock:
+                    if client in self.clients:
+                        nickname = self.clients.pop(client)
+
+                try:
+                    client.close()
+                except:
+                    pass
+
+                if nickname:
+                    self.broadcast(
+                        f"{nickname} {LEFT}".encode(ENCODING)
+                    )
+                    print(f"{nickname} disconnected")
+
+                break
+
+    def receive(self):
+        while True:
+            client, address = self.server.accept()
+            print(f"Connected: {address}")
+
+            client.send(NICK.encode(ENCODING))
+            nickname = client.recv(BUFFER_SIZE).decode(ENCODING)
+
+            with self.lock:
+                self.clients[client] = nickname
+
+            print(f"Nickname: {nickname}")
+
+            self.broadcast(f"{nickname} {JOINED}".encode(ENCODING))
+
+            client.send(CONNECTED.encode(ENCODING))
+
+            thread = threading.Thread(
+                target=self.handle_client,
+                args=(client,),
+                daemon=True
+            )
+            thread.start()
+
+    def start(self):
         try:
-            client.send(msg)
-        except:
-            pass
+            self.receive()
+        except KeyboardInterrupt:
+            print("\nShutting down server...")
 
-def handle(client):
-    while True:
-        try:
-            msg = client.recv(1024) #probaj da primis poruku klijenta
-            if not msg:
-                raise Exception()
-            if msg.decode("ascii") == "EXIT":
-                raise Exception()
-            broadcast(msg) #ako radi, posalji svim klijentima
-        except:
-            nickname = None
-            with clients_lock:
-                if client in clients:
-                    nickname = clients[client]
-                    del clients[client]
-            client.close()
-            if nickname is not None:
-                broadcast(f"{nickname} has left the chat.".encode("ascii"))
-                print(f"{nickname} disconnected.")
-            break
+            with self.lock:
+                clients = list(self.clients.keys())
 
-def receive():
-    while True:
-        client, address=server.accept()
-        print(f'Connected with {str(address)}')
-        client.send('NICK'.encode('ascii'))
-        nickname=client.recv(1024).decode('ascii')
-        with clients_lock:
-            clients[client] = nickname
-        print(f'Nickname of the client is {nickname}.')
-        broadcast(f'{nickname} has joined the chat.'.encode('ascii'))
-        client.send('Connected to the server!'.encode('ascii'))
+            for c in clients:
+                try:
+                    c.close()
+                except:
+                    pass
 
-        thread=threading.Thread(target=handle, args=(client,))
-        thread.start()
-print('Server is ready.')
-try:
-    receive()
-except KeyboardInterrupt:
-    print("\nShutting down server...")
+            self.server.close()
+            print("Server stopped.")
 
-    with clients_lock:
-        current_clients = list(clients.keys())
 
-    for client in current_clients:
-        client.close()
-
-    server.close()
-
-    print("Server stopped.")
+if __name__ == "__main__":
+    server = ChatServer()
+    server.start()
