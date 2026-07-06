@@ -3,12 +3,14 @@ from tkinter import scrolledtext
 import threading
 
 from network import Network
+from protocol import PRIVATE_CMD
 
 
 class ChatGUI:
     def __init__(self):
         self.network = Network()
         self.network.on_message = self.safe_add_message
+        self.network.on_userlist = self.safe_update_userlist
         self.root = tk.Tk()
         self.root.title("Python Chat")
 
@@ -53,14 +55,27 @@ class ChatGUI:
         self.chat_frame = tk.Frame(self.root)
         self.chat_frame.pack()
 
+        tk.Label(
+            self.chat_frame,
+            text=f"Logged in as: {self.nickname}",
+            font=("Segoe UI", 9, "bold")
+        ).pack(pady=(5, 0))
+
+        self.top_frame = tk.Frame(self.chat_frame)
+        self.top_frame.pack()
+
         # chat display
         self.chat_area = scrolledtext.ScrolledText(
-            self.chat_frame,
+            self.top_frame,
             width=60,
             height=20
         )
-        self.chat_area.pack()
+        self.chat_area.pack(side=tk.LEFT)
         self.chat_area.config(state="disabled")
+
+        # user list panel
+        self.user_listbox = tk.Listbox(self.top_frame, width=20)
+        self.user_listbox.pack(side=tk.LEFT, fill=tk.Y)
 
         # input field
         self.entry = tk.Entry(self.chat_frame, width=50)
@@ -85,6 +100,14 @@ class ChatGUI:
     def safe_add_message(self, msg):
         self.root.after(0, self.add_message, msg)
 
+    def safe_update_userlist(self, nicknames):
+        self.root.after(0, self.update_userlist, nicknames)
+
+    def update_userlist(self, nicknames):
+        self.user_listbox.delete(0, tk.END)
+        for nickname in nicknames:
+            self.user_listbox.insert(tk.END, nickname)
+
     def send_message(self):
         msg = self.entry.get()
         if not msg:
@@ -92,6 +115,14 @@ class ChatGUI:
 
         if msg == "/exit":
             self.disconnect()
+            return
+
+        if msg.startswith(PRIVATE_CMD + " "):
+            parts = msg[len(PRIVATE_CMD) + 1:].split(" ", 1)
+            if len(parts) == 2:
+                target, text = parts
+                self.network.send_private(target, text)
+            self.entry.delete(0, tk.END)
             return
 
         self.network.send(msg)

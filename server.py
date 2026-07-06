@@ -1,5 +1,6 @@
 import socket
 import threading
+from collections import deque
 
 from protocol import *
 
@@ -12,12 +13,15 @@ class ChatServer:
 
         # shared state: client_socket -> nickname
         self.clients = {}
+        # shared state: last 20 broadcast chat messages (raw wire bytes)
+        self.history = deque(maxlen=20)
         self.lock = threading.Lock()
 
         print(f"Server started on {HOST}:{PORT}")
 
     def broadcast(self, msg):
         with self.lock:
+            self.history.append(msg)
             clients = list(self.clients.keys())
 
         for client in clients:
@@ -25,6 +29,26 @@ class ChatServer:
                 client.send(msg)
             except:
                 pass
+
+    def broadcast_userlist(self):
+        with self.lock:
+            nicknames = list(self.clients.values())
+            clients = list(self.clients.keys())
+
+        msg = f"{LIST}{SEP}{','.join(nicknames)}{DELIM}".encode(ENCODING)
+
+        for client in clients:
+            try:
+                client.send(msg)
+            except:
+                pass
+
+    def find_client(self, nickname):
+        with self.lock:
+            for sock, nick in self.clients.items():
+                if nick == nickname:
+                    return sock
+        return None
 
     def handle_client(self, client):
         while True:
@@ -39,7 +63,29 @@ class ChatServer:
                 if decoded == EXIT:
                     raise Exception()
 
-                self.broadcast(msg)
+                if decoded.startswith(PRIV + SEP):
+                    _, target, text = decoded.split(SEP, 2)
+                    target_sock = self.find_client(target)
+
+                    if target_sock:
+                        priv_msg = f"{PRIV}{SEP}{target}{SEP}{text}{DELIM}".encode(ENCODING)
+                        try:
+                            target_sock.send(priv_msg)
+                        except:
+                            pass
+                        try:
+                            client.send(priv_msg)
+                        except:
+                            pass
+                    else:
+                        try:
+                            client.send(f"[System] User '{target}' not found.{DELIM}".encode(ENCODING))
+                        except:
+                            pass
+
+                    continue
+
+                self.broadcast(msg + DELIM.encode(ENCODING))
 
             except:
                 nickname = None
@@ -55,8 +101,9 @@ class ChatServer:
 
                 if nickname:
                     self.broadcast(
-                        f"{nickname} {LEFT}".encode(ENCODING)
+                        f"{nickname} {LEFT}{DELIM}".encode(ENCODING)
                     )
+                    self.broadcast_userlist()
                     print(f"{nickname} disconnected")
 
                 break
@@ -74,9 +121,20 @@ class ChatServer:
 
             print(f"Nickname: {nickname}")
 
-            self.broadcast(f"{nickname} {JOINED}".encode(ENCODING))
+            self.broadcast(f"{nickname} {JOINED}{DELIM}".encode(ENCODING))
 
-            client.send(CONNECTED.encode(ENCODING))
+            client.send((CONNECTED + DELIM).encode(ENCODING))
+
+            with self.lock:
+                history = list(self.history)
+
+            for line in history:
+                try:
+                    client.send(line)
+                except:
+                    pass
+
+            self.broadcast_userlist()
 
             thread = threading.Thread(
                 target=self.handle_client,

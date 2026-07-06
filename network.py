@@ -12,9 +12,15 @@ class Network:
 
         self.connected = False
 
-        # Funkcija koju će GUI proslediti
-        # Poziva se svaki put kada stigne nova poruka
+        # Buffer za poruke primljene posle NICK/nickname razmene, jer server
+        # može poslati više poruka zaredom (istorija, lista korisnika) bez
+        # čekanja odgovora, a TCP ne čuva granice poruka.
+        self.buffer = ""
+
+        # Funkcije koje će GUI proslediti
+        # Pozivaju se svaki put kada stigne nova poruka / lista korisnika
         self.on_message = None
+        self.on_userlist = None
 
     def connect(self, nickname):
         self.nickname = nickname
@@ -34,16 +40,18 @@ class Network:
     def receive(self):
         while self.connected:
             try:
-                message = self.client.recv(BUFFER_SIZE)
+                chunk = self.client.recv(BUFFER_SIZE)
 
-                if not message:
-                    continue
+                if not chunk:
+                    break
 
-                message = message.decode(ENCODING)
+                self.buffer += chunk.decode(ENCODING)
 
-                if self.on_message:
-                    self.on_message(message)
+                while DELIM in self.buffer:
+                    message, self.buffer = self.buffer.split(DELIM, 1)
 
+                    if message:
+                        self.dispatch(message)
 
             except Exception as e:
 
@@ -54,11 +62,36 @@ class Network:
         self.connected = False
         self.client.close()
 
+    def dispatch(self, message):
+        if message.startswith(LIST + SEP):
+            nicknames = message[len(LIST) + 1:].split(",")
+            nicknames = [n for n in nicknames if n]
+
+            if self.on_userlist:
+                self.on_userlist(nicknames)
+
+        elif message.startswith(PRIV + SEP):
+            _, target, text = message.split(SEP, 2)
+
+            if self.on_message:
+                self.on_message(f"[Private] {text}")
+
+        elif self.on_message:
+            self.on_message(message)
+
     def send(self, text):
         if not self.connected:
             return
 
         message = f"{self.nickname}: {text}"
+
+        self.client.send(message.encode(ENCODING))
+
+    def send_private(self, target, text):
+        if not self.connected:
+            return
+
+        message = f"{PRIV}{SEP}{target}{SEP}{self.nickname}: {text}"
 
         self.client.send(message.encode(ENCODING))
 
